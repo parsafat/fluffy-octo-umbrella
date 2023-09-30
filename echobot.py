@@ -33,9 +33,34 @@ ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
     SELECTING_ATTRIBUTE,
     CURRENT_ATTRIBUTE,
     TYPING,
-) = map(chr, range(6))
+    ADDING_USER,
+    SELECTING_ACTION,
+) = map(chr, range(8))
 
 END = ConversationHandler.END
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    text = "You may choose to add a user. To abort, simply type /stop."
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="Add user", callback_data=str(ADDING_USER)),
+        ],
+        [
+            InlineKeyboardButton(text="Done", callback_data=str(END)),
+        ],
+    ]
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    if context.user_data.get(START_OVER):
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text=text, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(text=text, reply_markup=keyboard)
+
+    context.user_data[START_OVER] = False
+    return SELECTING_ACTION
 
 
 async def select_attribute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -47,13 +72,15 @@ async def select_attribute(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ]
     keyboard = InlineKeyboardMarkup(buttons)
 
-    if context.user_data.get(START_OVER):
-        text = "Got it! Please select an attribute to update."
-    else:
+    if not context.user_data.get(START_OVER):
         context.user_data[ATTRIBUTES] = {}
         text = "Please select an attribute to update."
 
-    await update.message.reply_text(text=text, reply_markup=keyboard)
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text=text, reply_markup=keyboard)
+    else:
+        text = "Got it! Please select an attribute to update."
+        await update.message.reply_text(text=text, reply_markup=keyboard)
 
     context.user_data[START_OVER] = False
     return SELECTING_ATTRIBUTE
@@ -101,19 +128,28 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
     return END
 
 
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text("Okay, bye.")
+
+    return END
+
+
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", select_attribute)],
+        entry_points=[CommandHandler("start", start)],
         states={
+            SELECTING_ACTION: [
+                CallbackQueryHandler(select_attribute, pattern="^" + str(ADDING_USER) + "$"),
+            ],
             SELECTING_ATTRIBUTE: [
                 CallbackQueryHandler(ask_for_input, pattern="^(?!" + str(END) + ").*$"),
                 CallbackQueryHandler(adding_user, pattern="^" + str(END) + "$"),
             ],
             TYPING: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_input)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("stop", stop)],
     )
 
     application.add_handler(conv_handler)
