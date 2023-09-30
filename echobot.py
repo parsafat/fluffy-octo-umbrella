@@ -13,6 +13,8 @@ from telegram.ext import (
 )
 
 from xray import *
+from database import *
+
 import uuid
 import html
 import urllib.parse
@@ -112,6 +114,7 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
         uuid_ = str(uuid.uuid4())
         email = context.user_data[ATTRIBUTES][EMAIL]
 
+        User.create(email=email)
         add_vless_user(client=xray_ctl.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
 
         uri = (
@@ -134,8 +137,24 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return END
 
 
+async def post_init(application: Application):
+    database.connect()
+
+
+async def post_shutdown(application: Application):
+    database.close()
+
+
 def main() -> None:
-    application = Application.builder().token(TOKEN).build()
+    create_tables()
+
+    application = (
+        Application.builder()
+        .token(TOKEN)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
