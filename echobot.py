@@ -18,6 +18,7 @@ from database import *
 import uuid
 import html
 import urllib.parse
+from datetime import datetime
 
 import configparser
 
@@ -26,6 +27,8 @@ config.read("config.ini")
 
 TOKEN = config["bot"]["token"]
 ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
+
+XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
 
 
 (
@@ -40,6 +43,17 @@ ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
 ) = map(chr, range(8))
 
 END = ConversationHandler.END
+
+
+async def save_traffic_stats(context: ContextTypes.DEFAULT_TYPE):
+    traffic = query_traffic(XRAY_CTL.ss_client)
+
+    for record in traffic.stat:
+        scope, name, _, direction = record.name.split(">>>")
+
+        if scope == "user":
+            user, _ = User.get_or_create(email=name)
+            TrafficStats.create(user=user, value=record.value, direction=direction, date=datetime.now())
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -108,14 +122,12 @@ async def save_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
 
 
 async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    xray_ctl = XrayController(api_address="127.0.0.1", api_port=10085)
-
     try:
         uuid_ = str(uuid.uuid4())
         email = context.user_data[ATTRIBUTES][EMAIL]
 
         User.create(email=email)
-        add_vless_user(client=xray_ctl.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
+        add_vless_user(client=XRAY_CTL.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
 
         uri = (
             f"vless://{uuid_}@{ADDRESS}:{PORT}?path={urllib.parse.quote_plus(PATH)}"
@@ -172,6 +184,9 @@ def main() -> None:
     )
 
     application.add_handler(conv_handler)
+
+    job_queue = application.job_queue
+    job_queue.run_repeating(save_traffic_stats, interval=300, first=10)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
