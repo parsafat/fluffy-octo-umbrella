@@ -39,8 +39,9 @@ XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
     CURRENT_ATTRIBUTE,
     TYPING,
     ADDING_USER,
-    SELECTING_ACTION,
-) = map(chr, range(8))
+    SELECTING_USER,
+    SHOWING,
+) = map(chr, range(9))
 
 END = ConversationHandler.END
 
@@ -57,26 +58,33 @@ async def save_traffic_stats(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    text = "You may choose to add a user. To abort, simply type /stop."
+    text = (
+        "You may choose to add a user or select a user to show their data or remove "
+        "them. To abort, simply type /stop.\n\nThe following are the current users:\n"
+    )
 
-    buttons = [
-        [
-            InlineKeyboardButton(text="Add user", callback_data=str(ADDING_USER)),
-        ],
-        [
-            InlineKeyboardButton(text="Done", callback_data=str(END)),
-        ],
-    ]
+    query = User.select(User.email)
+
+    buttons = [[InlineKeyboardButton(text="+", callback_data=str(ADDING_USER))]]
+
+    for i, user in enumerate(query):
+        text += f"\n{i}. <i>{user.email}</i>"
+        button = InlineKeyboardButton(text=str(i), callback_data=user.email)
+        if len(buttons[-1]) < 5:
+            buttons[-1].append(button)
+        else:
+            buttons.append([button])
+
     keyboard = InlineKeyboardMarkup(buttons)
 
     if context.user_data.get(START_OVER):
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text=text, reply_markup=keyboard)
+        await update.callback_query.edit_message_text(text=text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     else:
-        await update.message.reply_text(text=text, reply_markup=keyboard)
+        await update.message.reply_text(text=text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
 
     context.user_data[START_OVER] = False
-    return SELECTING_ACTION
+    return SELECTING_USER
 
 
 async def select_attribute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -100,6 +108,35 @@ async def select_attribute(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     context.user_data[START_OVER] = False
     return SELECTING_ATTRIBUTE
+
+
+def sizeof_fmt(num, suffix="B"):
+    for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.1f}Yi{suffix}"
+
+
+async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    user = User.get(User.email==update.callback_query.data)
+    stats = user.traffic_stats or []
+
+    text = (
+        f"Email:\n - {user.email}"
+        f"\nTraffic Usage (since last Xray restart):"
+        f"\n - {sizeof_fmt(stats[-1].value) if stats else '0B'} downlink, "
+        f"{sizeof_fmt(stats[-2].value) if len(stats) > 1 else '0B'} uplink"
+    )
+
+    buttons = [[InlineKeyboardButton(text="Back", callback_data=str(END))]]
+    keyboard = InlineKeyboardMarkup(buttons)
+
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(text=text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
+
+    context.user_data[START_OVER] = True
+    return SHOWING
 
 
 async def ask_for_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -171,13 +208,15 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            SELECTING_ACTION: [
+            SELECTING_USER: [
                 CallbackQueryHandler(select_attribute, pattern="^" + str(ADDING_USER) + "$"),
+                CallbackQueryHandler(show_data, pattern="^(?!" + str(ADDING_USER) + ").*$"),
             ],
             SELECTING_ATTRIBUTE: [
                 CallbackQueryHandler(ask_for_input, pattern="^(?!" + str(END) + ").*$"),
                 CallbackQueryHandler(adding_user, pattern="^" + str(END) + "$"),
             ],
+            SHOWING: [CallbackQueryHandler(start, pattern="^" + str(END) + "$")],
             TYPING: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_input)],
         },
         fallbacks=[CommandHandler("stop", stop)],
