@@ -17,6 +17,7 @@ from database import *
 
 import uuid
 import html
+import json
 import urllib.parse
 from datetime import datetime
 
@@ -26,7 +27,7 @@ config = configparser.ConfigParser()
 config.read("config.ini")
 
 TOKEN = config["bot"]["token"]
-ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
+CONFIG, ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
 
 XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
 
@@ -52,9 +53,8 @@ async def save_traffic_stats(context: ContextTypes.DEFAULT_TYPE):
     for record in traffic.stat:
         scope, name, _, direction = record.name.split(">>>")
 
-        if scope == "user":
-            user, _ = User.get_or_create(email=name)
-            TrafficStats.create(user=user, value=record.value, direction=direction, date=datetime.now())
+        if scope == "user" and (user:=User.select().where(User.email==name)).exists():
+            TrafficStats.create(user=user.get(), value=record.value, direction=direction, date=datetime.now())
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -188,6 +188,13 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def post_init(application: Application):
     database.connect()
+
+    with open(CONFIG, "r") as handle:
+        xray_config = json.load(handle)
+
+        vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
+        for client in vless_inbound["settings"]["clients"]:
+            User.get_or_create(email=client["email"])
 
 
 async def post_shutdown(application: Application):
