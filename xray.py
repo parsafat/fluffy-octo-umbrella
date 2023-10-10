@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from grpc import insecure_channel, RpcError
-from app.proxyman.command.command_pb2 import AddUserOperation, AlterInboundRequest
+from app.proxyman.command.command_pb2 import AddUserOperation, RemoveUserOperation, AlterInboundRequest
 from app.proxyman.command.command_pb2_grpc import HandlerServiceStub
 from app.stats.command.command_pb2 import QueryStatsRequest
 from app.stats.command.command_pb2_grpc import StatsServiceStub
@@ -36,7 +36,21 @@ def add_vless_user(client, uuid, level, in_tag, email):
             value=operation.SerializeToString()
         )
     )
-    
+
+    return client.AlterInbound(request)
+
+
+def remove_vless_user(client, in_tag, email):
+    operation = RemoveUserOperation(email=email)
+
+    request = AlterInboundRequest(
+        tag=in_tag,
+        operation=TypedMessage(
+            type="xray.app.proxyman.command.RemoveUserOperation",
+            value=operation.SerializeToString()
+        )
+    )
+
     return client.AlterInbound(request)
 
 

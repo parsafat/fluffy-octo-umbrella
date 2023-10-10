@@ -13,6 +13,13 @@ class BaseModel(Model):
 class User(BaseModel):
     email = CharField(unique=True)
 
+    def remove(self):
+        (TrafficStats
+         .delete()
+         .where(TrafficStats.user == self)
+         .execute())
+        self.delete_instance()
+
 
 class TrafficStats(BaseModel):
     user = ForeignKeyField(User, backref="traffic_stats")

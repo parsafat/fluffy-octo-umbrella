@@ -42,7 +42,8 @@ XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
     ADDING_USER,
     SELECTING_USER,
     SHOWING,
-) = map(chr, range(9))
+    REMOVING_USER,
+) = map(chr, range(10))
 
 END = ConversationHandler.END
 
@@ -120,6 +121,9 @@ def sizeof_fmt(num, suffix="B"):
 
 async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     user = User.get(User.email==update.callback_query.data)
+
+    context.user_data[REMOVING_USER] = user
+
     stats = user.traffic_stats or []
 
     text = (
@@ -129,7 +133,12 @@ async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         f"{sizeof_fmt(stats[-2].value) if len(stats) > 1 else '0B'} uplink"
     )
 
-    buttons = [[InlineKeyboardButton(text="Back", callback_data=str(END))]]
+    buttons = [
+        [
+            InlineKeyboardButton(text="Remove", callback_data=str(REMOVING_USER)),
+            InlineKeyboardButton(text="Back", callback_data=str(END))
+        ]
+    ]
     keyboard = InlineKeyboardMarkup(buttons)
 
     await update.callback_query.answer()
@@ -180,6 +189,25 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
     return END
 
 
+async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    user = context.user_data.pop(REMOVING_USER)
+
+    try:
+        remove_vless_user(client=XRAY_CTL.hs_client, in_tag="vless", email=user.email)
+        user.remove()
+
+    except RpcError as e:
+        text = f"Failed to remove VLESS user:\n\n<pre>{html.escape(str(e))}</pre>"
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text=text, parse_mode=ParseMode.HTML)
+        context.user_data[START_OVER] = False
+        return END
+
+    await update.callback_query.answer("Removed user")
+    return await start(update, context)
+
+
+
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Okay, bye.")
 
@@ -223,7 +251,10 @@ def main() -> None:
                 CallbackQueryHandler(ask_for_input, pattern="^(?!" + str(END) + ").*$"),
                 CallbackQueryHandler(adding_user, pattern="^" + str(END) + "$"),
             ],
-            SHOWING: [CallbackQueryHandler(start, pattern="^" + str(END) + "$")],
+            SHOWING: [
+                CallbackQueryHandler(removing_user, pattern="^" + str(REMOVING_USER) + "$"),
+                CallbackQueryHandler(start, pattern="^" + str(END) + "$")
+            ],
             TYPING: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_input)],
         },
         fallbacks=[CommandHandler("stop", stop)],
