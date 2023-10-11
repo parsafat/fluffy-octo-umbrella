@@ -124,13 +124,16 @@ async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
 
     context.user_data[REMOVING_USER] = user
 
-    stats = user.traffic_stats or []
+    sorted_stats = user.traffic_stats.order_by(TrafficStats.date.desc())
+
+    most_recent_downlink = sorted_stats.where(TrafficStats.direction == "downlink").first()
+    most_recent_uplink = sorted_stats.where(TrafficStats.direction == "uplink").first()
 
     text = (
         f"Email:\n - {user.email}"
         f"\nTraffic Usage (since last Xray restart):"
-        f"\n - {sizeof_fmt(stats[-1].value) if stats else '0B'} downlink, "
-        f"{sizeof_fmt(stats[-2].value) if len(stats) > 1 else '0B'} uplink"
+        f"\n - {sizeof_fmt(most_recent_downlink.value) if most_recent_downlink else '0B'} downlink, "
+        f"{sizeof_fmt(most_recent_uplink.value) if most_recent_uplink else '0B'} uplink"
     )
 
     buttons = [
