@@ -1,0 +1,5 @@
+python-telegram-bot==20.6
+python-telegram-bot[job-queue]==20.6
+grpcio==1.59.0
+grpcio-tools==1.59.0
+peewee==3.17.0
