@@ -12,6 +12,7 @@ class BaseModel(Model):
 
 class User(BaseModel):
     email = CharField(unique=True)
+    persistent = BooleanField()
 
     def remove(self):
         (TrafficStats
