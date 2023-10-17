@@ -14,21 +14,7 @@ class User(BaseModel):
     email = CharField(unique=True)
     persistent = BooleanField()
 
-    def remove(self):
-        (TrafficStats
-         .delete()
-         .where(TrafficStats.user == self)
-         .execute())
-        self.delete_instance()
-
-
-class TrafficStats(BaseModel):
-    user = ForeignKeyField(User, backref="traffic_stats")
-    value = IntegerField()
-    direction = CharField()
-    date = DateTimeField()
-
 
 def create_tables():
     with database:
-        database.create_tables([User, TrafficStats])
+        database.create_tables([User])

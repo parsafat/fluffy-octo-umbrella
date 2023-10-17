@@ -12,6 +12,10 @@ from telegram.ext import (
     MessageHandler,
 )
 
+import influxdb_client
+from influxdb_client import Point
+from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
+
 from xray import *
 from database import *
 
@@ -26,12 +30,12 @@ import configparser
 config = configparser.ConfigParser()
 config.read("config.ini")
 
-TOKEN = config["bot"]["token"]
+BOT_TOKEN = config["bot"]["token"]
 XRAY_CONFIG_PATH, ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
+INFLUXDB_TOKEN, ORG, URL, BUCKET= config["influxdb"].values()
 
 with open(XRAY_CONFIG_PATH, "r") as handle:
     xray_config = json.load(handle)
-
 
 XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
 
@@ -48,19 +52,28 @@ XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
     SHOWING,
     REMOVING_USER,
     PERSISTENT,
-) = map(chr, range(11))
+    INFLUXDB_ASYNC_CLIENT,
+) = map(chr, range(12))
 
 END = ConversationHandler.END
 
 
 async def save_traffic_stats(context: ContextTypes.DEFAULT_TYPE):
+    write_api = context.bot_data[INFLUXDB_ASYNC_CLIENT].write_api()
+
     traffic = query_traffic(XRAY_CTL.ss_client)
 
     for record in traffic.stat:
         scope, name, _, direction = record.name.split(">>>")
 
         if scope == "user" and (user:=User.select().where(User.email==name)).exists():
-            TrafficStats.create(user=user.get(), value=record.value, direction=direction, date=datetime.now())
+            point = (
+                Point("traffic-stats")
+                .tag("email", name)
+                .tag("direction", direction)
+                .field("value", record.value)
+            )
+            await write_api.write(bucket=BUCKET, org=ORG, record=point)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -133,20 +146,32 @@ def sizeof_fmt(num, suffix="B"):
 
 
 async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    query_api = context.bot_data[INFLUXDB_ASYNC_CLIENT].query_api()
+
     user = User.get(User.email==update.callback_query.data)
 
     context.user_data[REMOVING_USER] = user
 
-    sorted_stats = user.traffic_stats.order_by(TrafficStats.date.desc())
+    query_template = '''
+        from(bucket: "{bucket}")
+        |> range(start: 0)
+        |> filter(fn: (r) => r._measurement == "traffic-stats")
+        |> filter(fn: (r) => r.email == "{email}")
+        |> filter(fn: (r) => r.direction == "{direction}")
+        |> last()
+    '''
 
-    most_recent_downlink = sorted_stats.where(TrafficStats.direction == "downlink").first()
-    most_recent_uplink = sorted_stats.where(TrafficStats.direction == "uplink").first()
+    query_downlink = query_template.format(bucket=BUCKET, email=user.email, direction="downlink")
+    query_uplink = query_template.format(bucket=BUCKET, email=user.email, direction="uplink")
+
+    [[most_recent_downlink]] = (await query_api.query(query_downlink, org=ORG)).to_values(columns=["_value"])
+    [[most_recent_uplink]] = (await query_api.query(query_uplink, org=ORG)).to_values(columns=["_value"])
 
     text = (
         f"Email:\n - {user.email}"
         f"\nTraffic Usage (since last Xray restart):"
-        f"\n - {sizeof_fmt(most_recent_downlink.value) if most_recent_downlink else '0B'} downlink, "
-        f"{sizeof_fmt(most_recent_uplink.value) if most_recent_uplink else '0B'} uplink"
+        f"\n - {sizeof_fmt(most_recent_downlink) if most_recent_downlink else '0B'} downlink, "
+        f"{sizeof_fmt(most_recent_uplink) if most_recent_uplink else '0B'} uplink"
     )
 
     buttons = [
@@ -254,6 +279,8 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def post_init(application: Application):
     database.connect()
 
+    application.bot_data[INFLUXDB_ASYNC_CLIENT] = InfluxDBClientAsync(url=URL, token=INFLUXDB_TOKEN, org=ORG)
+
     vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
     for client in vless_inbound["settings"]["clients"]:
         User.get_or_create(email=client["email"], defaults={"persistent": True})
@@ -261,6 +288,7 @@ async def post_init(application: Application):
 
 async def post_shutdown(application: Application):
     database.close()
+    application.bot_data[INFLUXDB_ASYNC_CLIENT].close()
 
 
 def main() -> None:
@@ -268,7 +296,7 @@ def main() -> None:
 
     application = (
         Application.builder()
-        .token(TOKEN)
+        .token(BOT_TOKEN)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
