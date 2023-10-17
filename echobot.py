@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
 
+import configparser
+import html
+import json
+import urllib.parse
+import uuid
+
+from influxdb_client import Point
+from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
+    filters,
     Application,
     CommandHandler,
     ContextTypes,
-    filters,
     ConversationHandler,
     CallbackQueryHandler,
     MessageHandler,
 )
 
-import influxdb_client
-from influxdb_client import Point
-from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
-
-from xray import *
 from database import *
+from xray import *
 
-import uuid
-import html
-import json
-import urllib.parse
-from datetime import datetime
-
-import configparser
 
 config = configparser.ConfigParser()
 config.read("config.ini")
