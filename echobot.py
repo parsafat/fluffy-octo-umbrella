@@ -20,8 +20,8 @@ from telegram.ext import (
     MessageHandler,
 )
 
-from database import *
-from xray import *
+from database import create_tables, database, User
+from xray import add_vless_user, query_traffic, remove_vless_user, XrayController
 
 
 config = configparser.ConfigParser()
