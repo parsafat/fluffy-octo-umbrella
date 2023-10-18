@@ -161,14 +161,13 @@ async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     query_downlink = query_template.format(bucket=BUCKET, email=user.email, direction="downlink")
     query_uplink = query_template.format(bucket=BUCKET, email=user.email, direction="uplink")
 
-    [[most_recent_downlink]] = (await query_api.query(query_downlink, org=ORG)).to_values(columns=["_value"])
-    [[most_recent_uplink]] = (await query_api.query(query_uplink, org=ORG)).to_values(columns=["_value"])
+    [[most_recent_downlink]] = (await query_api.query(query_downlink, org=ORG)).to_values(columns=["_value"]) or [[0]]
+    [[most_recent_uplink]] = (await query_api.query(query_uplink, org=ORG)).to_values(columns=["_value"]) or [[0]]
 
     text = (
         f"Email:\n - {user.email}"
         f"\nTraffic Usage (since last Xray restart):"
-        f"\n - {sizeof_fmt(most_recent_downlink) if most_recent_downlink else '0B'} downlink, "
-        f"{sizeof_fmt(most_recent_uplink) if most_recent_uplink else '0B'} uplink"
+        f"\n - {sizeof_fmt(most_recent_downlink)} downlink, {sizeof_fmt(most_recent_uplink)} uplink"
     )
 
     buttons = [
