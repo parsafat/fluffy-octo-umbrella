@@ -253,7 +253,7 @@ async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
         context.user_data[START_OVER] = False
         return END
 
-    user.remove()
+    user.delete_instance()
     if user.persistent:
         vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
         vless_inbound["settings"]["clients"][:] = [c for c in vless_inbound["settings"]["clients"] if c["email"] != user.email]
