@@ -231,7 +231,7 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
             f"vless://{uuid_}@{ADDRESS}:{PORT}?path={urllib.parse.quote_plus(PATH)}"
             f"&security=tls&encryption=none&type=ws#{REMARKS}-{email}"
         )
-        text = f"Here is the URI for user \"{email}\":\n\n<pre>{html.escape(uri)}</pre>"
+        text = f"Here is the URI for user \"{email}\":\n\n<code>{html.escape(uri)}</code>"
     except RpcError as e:
         text = f"Failed to add VLESS user:\n\n<pre>{html.escape(str(e))}</pre>"
 
