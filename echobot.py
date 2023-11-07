@@ -27,7 +27,9 @@ from xray import add_vless_user, query_traffic, remove_vless_user, XrayControlle
 config = configparser.ConfigParser()
 config.read("config.ini")
 
-BOT_TOKEN = config["bot"]["token"]
+BOT_TOKEN = config["telegram"]["bot_token"]
+SUPER_USER_ID = int(config["telegram"]["super_user_id"])
+
 XRAY_CONFIG_PATH, ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
 INFLUXDB_TOKEN, ORG, URL, BUCKET= config["influxdb"].values()
 
@@ -299,7 +301,7 @@ def main() -> None:
     )
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[CommandHandler("start", start, filters=filters.User(SUPER_USER_ID))],
         states={
             SELECTING_USER: [
                 CallbackQueryHandler(select_attribute, pattern="^" + str(ADDING_USER) + "$"),
