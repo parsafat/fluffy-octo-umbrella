@@ -32,10 +32,11 @@ config.read("config.ini")
 BOT_TOKEN = config["telegram"]["bot_token"]
 SUPER_USER_ID = int(config["telegram"]["super_user_id"])
 
-XRAY_CONFIG_PATH, ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
-INFLUXDB_TOKEN, ORG, URL, BUCKET= config["influxdb"].values()
+INFLUXDB_TOKEN, ORG, URL, BUCKET = config["influxdb"].values()
+XRAY_CONFIG_PATH, API_ADDRESS, API_PORT = config["xray"].values()
+ADDRESS, PORT, PATH, REMARKS = config["uri"].values()
 
-XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
+XRAY_CTL = XrayController(api_address=API_ADDRESS, api_port=API_PORT)
 
 
 (
