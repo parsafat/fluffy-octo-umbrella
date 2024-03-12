@@ -21,7 +21,7 @@ from telegram.ext import (
 )
 
 from database import create_tables, database, User
-from xray import add_vless_user, query_traffic, remove_vless_user, XrayController
+from xray import add_vless_user, query_traffic, remove_vless_user, XrayController, RpcError
 
 
 config = configparser.ConfigParser()
