@@ -33,9 +33,6 @@ SUPER_USER_ID = int(config["telegram"]["super_user_id"])
 XRAY_CONFIG_PATH, ADDRESS, PORT, PATH, REMARKS = config["xray"].values()
 INFLUXDB_TOKEN, ORG, URL, BUCKET= config["influxdb"].values()
 
-with open(XRAY_CONFIG_PATH, "r") as handle:
-    xray_config = json.load(handle)
-
 XRAY_CTL = XrayController(api_address="127.0.0.1", api_port=10085)
 
 
@@ -229,6 +226,9 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
     add_vless_user(client=XRAY_CTL.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
 
     if persistent:
+        with open(XRAY_CONFIG_PATH, "r") as handle:
+            xray_config = json.load(handle)
+
         vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
         vless_inbound["settings"]["clients"].append({"id": uuid_, "email": email})
 
@@ -261,6 +261,9 @@ async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
 
     user.delete_instance()
     if user.persistent:
+        with open(XRAY_CONFIG_PATH, "r") as handle:
+            xray_config = json.load(handle)
+
         vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
         vless_inbound["settings"]["clients"][:] = [c for c in vless_inbound["settings"]["clients"] if c["email"] != user.email]
 
@@ -282,6 +285,9 @@ async def post_init(application: Application):
     database.connect()
 
     application.bot_data[INFLUXDB_ASYNC_CLIENT] = InfluxDBClientAsync(url=URL, token=INFLUXDB_TOKEN, org=ORG)
+
+    with open(XRAY_CONFIG_PATH, "r") as handle:
+        xray_config = json.load(handle)
 
     vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
     for client in vless_inbound["settings"]["clients"]:
