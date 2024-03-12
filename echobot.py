@@ -3,6 +3,8 @@
 import configparser
 import html
 import json
+import qrcode
+import tempfile
 import urllib.parse
 import uuid
 
@@ -243,6 +245,12 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
 
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(text=text, parse_mode=ParseMode.HTML)
+
+    qr = qrcode.make(uri)
+    with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+        qr.save(handle.name)
+
+        await update.effective_message.reply_document(document=handle)
 
     return END
 
