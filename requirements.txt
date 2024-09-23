@@ -3,5 +3,4 @@ python-telegram-bot[job-queue]==20.6
 grpcio==1.59.0
 grpcio-tools==1.59.0
 peewee==3.17.0
-influxdb-client[async]==1.38.0
 qrcode==7.4.2

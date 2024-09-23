@@ -8,8 +8,8 @@ import tempfile
 import urllib.parse
 import uuid
 
-from influxdb_client import Point
-from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
+from datetime import datetime, timezone
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -22,7 +22,7 @@ from telegram.ext import (
     MessageHandler,
 )
 
-from database import create_tables, database, User
+from database import create_tables, database, User, Hour
 from xray import add_vless_user, query_traffic, remove_vless_user, XrayController, RpcError
 
 
@@ -32,7 +32,6 @@ config.read("config.ini")
 BOT_TOKEN = config["telegram"]["bot_token"]
 SUPER_USER_ID = int(config["telegram"]["super_user_id"])
 
-INFLUXDB_TOKEN, ORG, URL, BUCKET = config["influxdb"].values()
 XRAY_CONFIG_PATH, API_ADDRESS, API_PORT = config["xray"].values()
 ADDRESS, PORT, PATH, REMARKS = config["uri"].values()
 
@@ -51,28 +50,38 @@ XRAY_CTL = XrayController(api_address=API_ADDRESS, api_port=API_PORT)
     SHOWING,
     REMOVING_USER,
     PERSISTENT,
-    INFLUXDB_ASYNC_CLIENT,
-) = map(chr, range(12))
+) = map(chr, range(11))
 
 END = ConversationHandler.END
 
 
-async def save_traffic_stats(context: ContextTypes.DEFAULT_TYPE):
-    write_api = context.bot_data[INFLUXDB_ASYNC_CLIENT].write_api()
+async def update_traffic_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
+    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
-    traffic = query_traffic(XRAY_CTL.ss_client)
+    traffic = query_traffic(XRAY_CTL.ss_client, None, True)
 
     for record in traffic.stat:
-        scope, name, _, direction = record.name.split(">>>")
+        if not record.name.startswith("user>>>"):
+            continue
 
-        if scope == "user" and (user:=User.select().where(User.email==name)).exists():
-            point = (
-                Point("traffic-stats")
-                .tag("email", name)
-                .tag("direction", direction)
-                .field("value", record.value)
-            )
-            await write_api.write(bucket=BUCKET, org=ORG, record=point)
+        _, email, _, direction = record.name.split(">>>")
+
+        user = User.get_or_none(User.email == email)
+        if not user:
+            continue
+
+        rx = record.value if direction == "downlink" else 0
+        tx = record.value if direction == "uplink" else 0
+
+        hour_record, created = Hour.get_or_create(
+            user=user,
+            date=current_hour,
+            defaults={"rx": rx, "tx": tx}
+        )
+        if not created:
+            hour_record.rx += rx
+            hour_record.tx += tx
+            hour_record.save()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -145,32 +154,34 @@ def sizeof_fmt(num, suffix="B"):
 
 
 async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    query_api = context.bot_data[INFLUXDB_ASYNC_CLIENT].query_api()
-
     user = User.get(User.email==update.callback_query.data)
 
     context.user_data[REMOVING_USER] = user
 
-    query_template = '''
-        from(bucket: "{bucket}")
-        |> range(start: 0)
-        |> filter(fn: (r) => r._measurement == "traffic-stats")
-        |> filter(fn: (r) => r.email == "{email}")
-        |> filter(fn: (r) => r.direction == "{direction}")
-        |> last()
-    '''
-
-    query_downlink = query_template.format(bucket=BUCKET, email=user.email, direction="downlink")
-    query_uplink = query_template.format(bucket=BUCKET, email=user.email, direction="uplink")
-
-    [[most_recent_downlink]] = (await query_api.query(query_downlink, org=ORG)).to_values(columns=["_value"]) or [[0]]
-    [[most_recent_uplink]] = (await query_api.query(query_uplink, org=ORG)).to_values(columns=["_value"]) or [[0]]
+    current_hour = datetime.now(timezone.utc).replace(microsecond=0, second=0, minute=0)
 
     text = (
         f"Email:\n - {user.email}"
-        f"\nTraffic Usage (since last Xray restart):"
-        f"\n - {sizeof_fmt(most_recent_downlink)} downlink, {sizeof_fmt(most_recent_uplink)} uplink"
+        f"\nTraffic Usage (hourly, UTC):"
     )
+
+    current_date = None
+    for record in user.hours.order_by(Hour.date.asc()):
+        record_date_str = record.date[:10]
+
+        if record_date_str != current_date:
+            current_date = record_date_str
+            text += f"\n {current_date}"
+
+        text += (
+            f"\n  {record.date[11:16]} - "
+            f"down: {sizeof_fmt(record.rx)}, "
+            f"up: {sizeof_fmt(record.tx)}"
+        )
+
+    if not user.hours.exists():
+        text += "\n - No traffic: user never connected."
+
 
     buttons = [
         [
@@ -283,7 +294,6 @@ async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
     return await start(update, context)
 
 
-
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Okay, bye.")
 
@@ -292,8 +302,6 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def post_init(application: Application):
     database.connect()
-
-    application.bot_data[INFLUXDB_ASYNC_CLIENT] = InfluxDBClientAsync(url=URL, token=INFLUXDB_TOKEN, org=ORG)
 
     with open(XRAY_CONFIG_PATH, "r") as handle:
         xray_config = json.load(handle)
@@ -305,7 +313,6 @@ async def post_init(application: Application):
 
 async def post_shutdown(application: Application):
     database.close()
-    application.bot_data[INFLUXDB_ASYNC_CLIENT].close()
 
 
 def main() -> None:
@@ -343,7 +350,7 @@ def main() -> None:
     application.add_handler(conv_handler)
 
     job_queue = application.job_queue
-    job_queue.run_repeating(save_traffic_stats, interval=300, first=10)
+    job_queue.run_repeating(update_traffic_stats, interval=300, first=10)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
