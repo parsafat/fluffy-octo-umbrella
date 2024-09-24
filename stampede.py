@@ -8,7 +8,7 @@ import tempfile
 import urllib.parse
 import uuid
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -82,6 +82,12 @@ async def update_traffic_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
             hour_record.rx += rx
             hour_record.tx += tx
             hour_record.save()
+
+
+async def prune_old_records(context: ContextTypes.DEFAULT_TYPE) -> None:
+    time_threshold = datetime.now() - timedelta(hours=24)
+
+    Hour.delete().where(Hour.date < time_threshold).execute()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -350,7 +356,8 @@ def main() -> None:
     application.add_handler(conv_handler)
 
     job_queue = application.job_queue
-    job_queue.run_repeating(update_traffic_stats, interval=300, first=10)
+    job_queue.run_repeating(update_traffic_stats, interval=timedelta(minutes=5), first=10)
+    job_queue.run_repeating(prune_old_records, interval=timedelta(hours=1), first=20)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
