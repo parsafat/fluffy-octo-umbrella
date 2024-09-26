@@ -15,8 +15,8 @@ class User(BaseModel):
     persistent = BooleanField()
 
 
-class Hour(BaseModel):
-    user = ForeignKeyField(User, backref="hours", on_delete="CASCADE")
+class TrafficStatsBaseModel(BaseModel):
+    user = ForeignKeyField(User, on_delete="CASCADE", null=False)
     date = DateTimeField(null=False)
     rx = IntegerField(null=False)
     tx = IntegerField(null=False)
@@ -27,6 +27,14 @@ class Hour(BaseModel):
         )
 
 
+class Hour(TrafficStatsBaseModel):
+    user = ForeignKeyField(User, backref="hours", on_delete="CASCADE", null=False)
+
+
+class FiveMinute(TrafficStatsBaseModel):
+    user = ForeignKeyField(User, backref="five_minutes", on_delete="CASCADE", null=False)
+
+
 def create_tables():
     with database:
-        database.create_tables([User, Hour])
+        database.create_tables([User, Hour, FiveMinute])

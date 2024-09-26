@@ -22,7 +22,7 @@ from telegram.ext import (
     MessageHandler,
 )
 
-from database import create_tables, database, User, Hour
+from database import create_tables, database, User, Hour, FiveMinute
 from xray import add_vless_user, query_traffic, remove_vless_user, XrayController, RpcError
 
 
@@ -56,7 +56,22 @@ END = ConversationHandler.END
 
 
 async def update_traffic_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
-    current_hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    def update_or_create_record(model, user, date, rx, tx):
+        record, created = model.get_or_create(
+            user=user,
+            date=date,
+            defaults={"rx": rx, "tx": tx}
+        )
+        if not created:
+            record.rx += rx
+            record.tx += tx
+            record.save()
+
+    now = datetime.now(timezone.utc)
+
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    current_five_minute = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0)
 
     traffic = query_traffic(XRAY_CTL.ss_client, None, True)
 
@@ -73,21 +88,16 @@ async def update_traffic_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
         rx = record.value if direction == "downlink" else 0
         tx = record.value if direction == "uplink" else 0
 
-        hour_record, created = Hour.get_or_create(
-            user=user,
-            date=current_hour,
-            defaults={"rx": rx, "tx": tx}
-        )
-        if not created:
-            hour_record.rx += rx
-            hour_record.tx += tx
-            hour_record.save()
+        update_or_create_record(Hour, user, current_hour, rx, tx)
+        update_or_create_record(FiveMinute, user, current_five_minute, rx, tx)
 
 
 async def prune_old_records(context: ContextTypes.DEFAULT_TYPE) -> None:
-    time_threshold = datetime.now() - timedelta(hours=24)
+    hour_threshold = datetime.now() - timedelta(hours=24)
+    five_minute_threshold = datetime.now() - timedelta(hours=2)
 
-    Hour.delete().where(Hour.date < time_threshold).execute()
+    Hour.delete().where(Hour.date < hour_threshold).execute()
+    FiveMinute.delete().where(FiveMinute.date < five_minute_threshold).execute()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -356,7 +366,7 @@ def main() -> None:
     application.add_handler(conv_handler)
 
     job_queue = application.job_queue
-    job_queue.run_repeating(update_traffic_stats, interval=timedelta(minutes=5), first=10)
+    job_queue.run_repeating(update_traffic_stats, interval=timedelta(minutes=1), first=10)
     job_queue.run_repeating(prune_old_records, interval=timedelta(hours=1), first=20)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
