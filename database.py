@@ -12,14 +12,13 @@ class BaseModel(Model):
 
 class User(BaseModel):
     email = CharField(unique=True)
-    persistent = BooleanField()
 
 
 class TrafficStatsBaseModel(BaseModel):
-    user = ForeignKeyField(User, on_delete="CASCADE", null=False)
-    date = DateTimeField(null=False)
-    rx = IntegerField(null=False)
-    tx = IntegerField(null=False)
+    user = ForeignKeyField(User, on_delete="CASCADE")
+    date = DateTimeField()
+    rx = IntegerField()
+    tx = IntegerField()
 
     class Meta:
         indexes = (
@@ -28,11 +27,11 @@ class TrafficStatsBaseModel(BaseModel):
 
 
 class Hour(TrafficStatsBaseModel):
-    user = ForeignKeyField(User, backref="hours", on_delete="CASCADE", null=False)
+    user = ForeignKeyField(User, backref="hours", on_delete="CASCADE")
 
 
 class FiveMinute(TrafficStatsBaseModel):
-    user = ForeignKeyField(User, backref="five_minutes", on_delete="CASCADE", null=False)
+    user = ForeignKeyField(User, backref="five_minutes", on_delete="CASCADE")
 
 
 def create_tables():

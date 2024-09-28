@@ -50,9 +50,8 @@ XRAY_CTL = XrayController(api_address=API_ADDRESS, api_port=API_PORT)
     SELECTING_USER,
     SHOWING,
     REMOVING_USER,
-    PERSISTENT,
     SHOWN_USER,
-) = map(chr, range(12))
+) = map(chr, range(11))
 
 END = ConversationHandler.END
 
@@ -140,7 +139,6 @@ async def select_attribute(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     buttons = [
         [
             InlineKeyboardButton(text="Update email", callback_data=str(EMAIL)),
-            InlineKeyboardButton(text="Toggle persistence", callback_data=str(PERSISTENT)),
         ],
         [
             InlineKeyboardButton(text="Done", callback_data=str(END)),
@@ -148,13 +146,12 @@ async def select_attribute(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     ]
     keyboard = InlineKeyboardMarkup(buttons)
 
-    attributes = context.user_data.setdefault(ATTRIBUTES, {PERSISTENT: True})
+    attributes = context.user_data.setdefault(ATTRIBUTES, dict())
 
     text = (
         "Customize the attributes to your liking. Once you're done, simply hit 'Done' to create the user."
         "\n\nThe following are the current values:"
         f"\n\nEmail: {attributes.get(EMAIL, '-')}"
-        f"\nPersistent: {attributes[PERSISTENT]}"
     )
 
     if not context.user_data.get(START_OVER):
@@ -257,13 +254,6 @@ async def save_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     return await select_attribute(update, context)
 
 
-async def toggle_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    current_attribute = update.callback_query.data
-    context.user_data[ATTRIBUTES][current_attribute] ^= True
-
-    return await select_attribute(update, context)
-
-
 async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     if not (email:=context.user_data[ATTRIBUTES].get(EMAIL)):
         await update.callback_query.answer("Email address cannot be empty.")
@@ -273,21 +263,19 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
         await update.callback_query.answer("This email address is already in use by another user.")
         return
 
-    persistent = context.user_data[ATTRIBUTES][PERSISTENT]
     uuid_ = str(uuid.uuid4())
 
-    User.create(email=email, persistent=persistent)
+    User.create(email=email)
     add_vless_user(client=XRAY_CTL.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
 
-    if persistent:
-        with open(XRAY_CONFIG_PATH, "r") as handle:
-            xray_config = json.load(handle)
+    with open(XRAY_CONFIG_PATH, "r") as handle:
+        xray_config = json.load(handle)
 
-        vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
-        vless_inbound["settings"]["clients"].append({"id": uuid_, "email": email})
+    vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
+    vless_inbound["settings"]["clients"].append({"id": uuid_, "email": email})
 
-        with open(XRAY_CONFIG_PATH, "w") as handle:
-            json.dump(xray_config, handle, indent=4)
+    with open(XRAY_CONFIG_PATH, "w") as handle:
+        json.dump(xray_config, handle, indent=4)
 
     uri = (
         f"vless://{uuid_}@{ADDRESS}:{PORT}?path={urllib.parse.quote_plus(PATH)}"
@@ -320,15 +308,15 @@ async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> s
         return END
 
     user.delete_instance()
-    if user.persistent:
-        with open(XRAY_CONFIG_PATH, "r") as handle:
-            xray_config = json.load(handle)
 
-        vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
-        vless_inbound["settings"]["clients"][:] = [c for c in vless_inbound["settings"]["clients"] if c["email"] != user.email]
+    with open(XRAY_CONFIG_PATH, "r") as handle:
+        xray_config = json.load(handle)
 
-        with open(XRAY_CONFIG_PATH, "w") as handle:
-            json.dump(xray_config, handle, indent=4)
+    vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
+    vless_inbound["settings"]["clients"][:] = [c for c in vless_inbound["settings"]["clients"] if c["email"] != user.email]
+
+    with open(XRAY_CONFIG_PATH, "w") as handle:
+        json.dump(xray_config, handle, indent=4)
 
     await update.callback_query.answer("Removed user")
     return await start(update, context)
@@ -348,7 +336,7 @@ async def post_init(application: Application):
 
     vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
     for client in vless_inbound["settings"]["clients"]:
-        User.get_or_create(email=client["email"], defaults={"persistent": True})
+        User.get_or_create(email=client["email"])
 
 
 async def post_shutdown(application: Application):
@@ -374,7 +362,6 @@ def main() -> None:
                 CallbackQueryHandler(show_data, pattern="^(?!" + str(ADDING_USER) + ").*$"),
             ],
             SELECTING_ATTRIBUTE: [
-                CallbackQueryHandler(toggle_input, pattern="^" + str(PERSISTENT) + "$"),
                 CallbackQueryHandler(ask_for_input, pattern="^(?!" + str(END) + ").*$"),
                 CallbackQueryHandler(adding_user, pattern="^" + str(END) + "$"),
             ],
