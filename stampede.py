@@ -9,6 +9,7 @@ import urllib.parse
 import uuid
 
 from datetime import datetime, timezone, timedelta
+from enum import StrEnum
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -50,9 +51,14 @@ XRAY_CTL = XrayController(api_address=API_ADDRESS, api_port=API_PORT)
     SHOWING,
     REMOVING_USER,
     PERSISTENT,
-) = map(chr, range(11))
+    SHOWN_USER,
+) = map(chr, range(12))
 
 END = ConversationHandler.END
+
+class Interval(StrEnum):
+    FIVE_MINUTES = "five-minutes"
+    HOURS = "hours"
 
 
 async def update_traffic_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -170,19 +176,28 @@ def sizeof_fmt(num, suffix="B"):
 
 
 async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    user = User.get(User.email==update.callback_query.data)
+    if context.user_data.get(START_OVER):
+        user = context.user_data[SHOWN_USER]
 
-    context.user_data[REMOVING_USER] = user
+        match interval:=update.callback_query.data:
+            case Interval.FIVE_MINUTES:
+                records = user.five_minutes
+            case Interval.HOURS:
+                records = user.hours
+    else:
+        user = context.user_data[SHOWN_USER] = \
+            User.get(User.email==update.callback_query.data)
 
-    current_hour = datetime.now(timezone.utc).replace(microsecond=0, second=0, minute=0)
+        interval = Interval.HOURS
+        records = user.hours
 
     text = (
         f"Email:\n - {user.email}"
-        f"\nTraffic Usage (hourly, UTC):"
+        f"\nTraffic Usage ({interval}, UTC):"
     )
 
     current_date = None
-    for record in user.hours.order_by(Hour.date.asc()):
+    for record in records.order_by(records.model.date.asc()):
         record_date_str = record.date[:10]
 
         if record_date_str != current_date:
@@ -195,16 +210,25 @@ async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"up: {sizeof_fmt(record.tx)}"
         )
 
-    if not user.hours.exists():
+    if not records.exists():
         text += "\n - No traffic: user never connected."
-
 
     buttons = [
         [
+            # Users can still send unwanted callback data
+            InlineKeyboardButton(text="5m", callback_data=Interval.FIVE_MINUTES)
+            if interval != Interval.FIVE_MINUTES
+            else None,
+
+            InlineKeyboardButton(text="Hr", callback_data=Interval.HOURS)
+            if interval != Interval.HOURS
+            else None,
+
             InlineKeyboardButton(text="Remove", callback_data=str(REMOVING_USER)),
             InlineKeyboardButton(text="Back", callback_data=str(END))
         ]
     ]
+    buttons = [[button for button in buttons[0] if button is not None]]
     keyboard = InlineKeyboardMarkup(buttons)
 
     await update.callback_query.answer()
@@ -284,7 +308,7 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
 
 
 async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    user = context.user_data.pop(REMOVING_USER)
+    user = context.user_data[SHOWN_USER]
 
     try:
         remove_vless_user(client=XRAY_CTL.hs_client, in_tag="vless", email=user.email)
@@ -355,6 +379,7 @@ def main() -> None:
                 CallbackQueryHandler(adding_user, pattern="^" + str(END) + "$"),
             ],
             SHOWING: [
+                CallbackQueryHandler(show_data, pattern="^(" + "|".join(Interval) + ")$"),
                 CallbackQueryHandler(removing_user, pattern="^" + str(REMOVING_USER) + "$"),
                 CallbackQueryHandler(start, pattern="^" + str(END) + "$")
             ],
