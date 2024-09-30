@@ -51,7 +51,9 @@ XRAY_CTL = XrayController(api_address=API_ADDRESS, api_port=API_PORT)
     SHOWING,
     REMOVING_USER,
     SHOWN_USER,
-) = map(chr, range(11))
+    DISABLING_USER,
+    ENABLING_USER,
+) = map(chr, range(13))
 
 END = ConversationHandler.END
 
@@ -111,11 +113,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         "them. To abort, simply type /stop.\n\nThe following are the current users:\n"
     )
 
-    query = User.select(User.email)
+    query = User.select().order_by(User.is_enabled.desc())
 
     buttons = [[InlineKeyboardButton(text="+", callback_data=str(ADDING_USER))]]
 
+    disabled_check = True
     for i, user in enumerate(query):
+        if disabled_check and not user.is_enabled:
+            text += f"\nDisabled users:\n"
+            disabled_check = False
         text += f"\n{i}. <i>{user.email}</i>"
         button = InlineKeyboardButton(text=str(i), callback_data=user.email)
         if len(buttons[-1]) < 5:
@@ -217,9 +223,15 @@ async def show_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
             if interval != Interval.FIVE_MINUTES
             else None,
 
+            # Users can still send unwanted callback data
             InlineKeyboardButton(text="Hr", callback_data=Interval.HOURS)
             if interval != Interval.HOURS
             else None,
+
+            InlineKeyboardButton(
+                text="Disable" if user.is_enabled else "Enable",
+                callback_data=str(DISABLING_USER) if user.is_enabled else str(ENABLING_USER)
+            ),
 
             InlineKeyboardButton(text="Remove", callback_data=str(REMOVING_USER)),
             InlineKeyboardButton(text="Back", callback_data=str(END))
@@ -254,6 +266,45 @@ async def save_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     return await select_attribute(update, context)
 
 
+def add_user_to_xray(uuid_: str, email: str) -> None:
+    add_vless_user(client=XRAY_CTL.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
+
+    with open(XRAY_CONFIG_PATH, "r") as handle:
+        xray_config = json.load(handle)
+
+    vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
+    vless_inbound["settings"]["clients"].append({"id": uuid_, "email": email})
+
+    with open(XRAY_CONFIG_PATH, "w") as handle:
+        json.dump(xray_config, handle, indent=4)
+
+
+async def enabling_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if (user:=context.user_data[SHOWN_USER]).is_enabled:
+        return
+
+    add_user_to_xray(str(user.uuid), user.email)
+
+    user.is_enabled = True
+    user.save()
+
+    buttons = update.effective_message.reply_markup.inline_keyboard
+    new_buttons = [
+        [
+            InlineKeyboardButton(
+                text="Disable",
+                callback_data=str(DISABLING_USER)
+            ) if button.text == "Enable" else button
+            for button in row
+        ]
+        for row in buttons
+    ]
+    keyboard = InlineKeyboardMarkup(new_buttons)
+
+    await update.effective_message.edit_reply_markup(reply_markup=keyboard)
+    await update.callback_query.answer("Enabled user")
+
+
 async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     if not (email:=context.user_data[ATTRIBUTES].get(EMAIL)):
         await update.callback_query.answer("Email address cannot be empty.")
@@ -265,17 +316,8 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
 
     uuid_ = str(uuid.uuid4())
 
-    User.create(email=email)
-    add_vless_user(client=XRAY_CTL.hs_client, uuid=uuid_, level=0, in_tag="vless", email=email)
-
-    with open(XRAY_CONFIG_PATH, "r") as handle:
-        xray_config = json.load(handle)
-
-    vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
-    vless_inbound["settings"]["clients"].append({"id": uuid_, "email": email})
-
-    with open(XRAY_CONFIG_PATH, "w") as handle:
-        json.dump(xray_config, handle, indent=4)
+    User.create(email=email, uuid=uuid_)
+    add_user_to_xray(uuid_, email)
 
     uri = (
         f"vless://{uuid_}@{ADDRESS}:{PORT}?path={urllib.parse.quote_plus(PATH)}"
@@ -295,28 +337,51 @@ async def adding_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str
     return END
 
 
-async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
-    user = context.user_data[SHOWN_USER]
-
-    try:
-        remove_vless_user(client=XRAY_CTL.hs_client, in_tag="vless", email=user.email)
-    except RpcError as e:
-        text = f"Failed to remove VLESS user:\n\n<pre>{html.escape(str(e))}</pre>"
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text=text, parse_mode=ParseMode.HTML)
-        context.user_data[START_OVER] = False
-        return END
-
-    user.delete_instance()
+def remove_user_from_xray(email: str) -> None:
+    remove_vless_user(client=XRAY_CTL.hs_client, in_tag="vless", email=email)
 
     with open(XRAY_CONFIG_PATH, "r") as handle:
         xray_config = json.load(handle)
 
     vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
-    vless_inbound["settings"]["clients"][:] = [c for c in vless_inbound["settings"]["clients"] if c["email"] != user.email]
+    vless_inbound["settings"]["clients"][:] = [c for c in vless_inbound["settings"]["clients"] if c["email"] != email]
 
     with open(XRAY_CONFIG_PATH, "w") as handle:
         json.dump(xray_config, handle, indent=4)
+
+
+async def disabling_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not (user:=context.user_data[SHOWN_USER]).is_enabled:
+        return
+
+    remove_user_from_xray(user.email)
+
+    user.is_enabled = False
+    user.save()
+
+    buttons = update.effective_message.reply_markup.inline_keyboard
+    new_buttons = [
+        [
+            InlineKeyboardButton(
+                text="Enable",
+                callback_data=str(ENABLING_USER)
+            ) if button.text == "Disable" else button
+            for button in row
+        ]
+        for row in buttons
+    ]
+    keyboard = InlineKeyboardMarkup(new_buttons)
+
+    await update.effective_message.edit_reply_markup(reply_markup=keyboard)
+    await update.callback_query.answer("Disabled user")
+
+
+async def removing_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    user = context.user_data[SHOWN_USER]
+
+    if user.is_enabled:
+        remove_user_from_xray(user.email)
+    user.delete_instance()
 
     await update.callback_query.answer("Removed user")
     return await start(update, context)
@@ -336,7 +401,7 @@ async def post_init(application: Application):
 
     vless_inbound, = [inbound for inbound in xray_config["inbounds"] if inbound["tag"] == "vless"]
     for client in vless_inbound["settings"]["clients"]:
-        User.get_or_create(email=client["email"])
+        User.get_or_create(email=client["email"], defaults={"uuid": client["id"]})
 
 
 async def post_shutdown(application: Application):
@@ -367,6 +432,8 @@ def main() -> None:
             ],
             SHOWING: [
                 CallbackQueryHandler(show_data, pattern="^(" + "|".join(Interval) + ")$"),
+                CallbackQueryHandler(enabling_user, pattern="^" + str(ENABLING_USER) + "$"),
+                CallbackQueryHandler(disabling_user, pattern="^" + str(DISABLING_USER) + "$"),
                 CallbackQueryHandler(removing_user, pattern="^" + str(REMOVING_USER) + "$"),
                 CallbackQueryHandler(start, pattern="^" + str(END) + "$")
             ],

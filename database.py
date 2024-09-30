@@ -12,6 +12,8 @@ class BaseModel(Model):
 
 class User(BaseModel):
     email = CharField(unique=True)
+    uuid = UUIDField(unique=True)
+    is_enabled = BooleanField(default=True)
 
 
 class TrafficStatsBaseModel(BaseModel):
